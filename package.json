@@ -1,0 +1,20 @@
+{
+  "name": "a-mfa",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Synchronous Multi-Modal Authentication (A-MFA) prototype",
+  "workspaces": [
+    "client",
+    "server"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,client -c blue,green \"npm run dev -w server\" \"npm run dev -w client\"",
+    "dev:server": "npm run dev -w server",
+    "dev:client": "npm run dev -w client",
+    "build": "npm run build -w client",
+    "start": "node server/index.js"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}
