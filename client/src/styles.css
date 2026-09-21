@@ -245,6 +245,14 @@ button:disabled {
   color: var(--muted);
 }
 
+.attempt-tag {
+  font-size: 0.75rem;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.2rem 0.6rem;
+}
+
 .tx-summary {
   margin: 1rem 0;
   font-size: 1.05rem;

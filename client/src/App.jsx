@@ -7,6 +7,7 @@ import { micSupported, startVoiceCapture } from './audio.js';
 
 const ENROLLMENT_PHRASE =
   'My voice is my key and I approve this enrollment';
+const MAX_ATTEMPTS = 3;
 
 export default function App() {
   const [username, setUsername] = useState('');
@@ -26,6 +27,9 @@ export default function App() {
 
   const [challenge, setChallenge] = useState(null);
   const [result, setResult] = useState(null);
+  const [attempt, setAttempt] = useState(1);
+  const [retrying, setRetrying] = useState(false);
+  const lastTxRef = useRef(null);
 
   async function handleRegister(e) {
     e.preventDefault();
@@ -81,14 +85,11 @@ export default function App() {
     e.preventDefault();
     setError('');
     setResult(null);
+    setAttempt(1);
+    lastTxRef.current = { txType, amount: Number(amount), payee };
     setBusy(true);
     try {
-      const ch = await api.authChallenge({
-        username,
-        txType,
-        amount: Number(amount),
-        payee,
-      });
+      const ch = await api.authChallenge({ username, ...lastTxRef.current });
       setChallenge(ch);
     } catch (err) {
       setError(err.message || String(err));
@@ -100,6 +101,21 @@ export default function App() {
   function handleAuthDone(res) {
     setChallenge(null);
     setResult(res);
+    // Retryable failures get a FRESH challenge + new phrase (sessions are
+    // single-use - we never reuse a burned session, preserving anti-replay).
+    if (!res.verified && res.retryable !== false && attempt < MAX_ATTEMPTS) {
+      setRetrying(true);
+      setTimeout(async () => {
+        setAttempt((a) => a + 1);
+        setRetrying(false);
+        try {
+          const ch = await api.authChallenge({ username, ...lastTxRef.current });
+          setChallenge(ch);
+        } catch (err) {
+          setError(err.message || String(err));
+        }
+      }, 1500);
+    }
   }
 
   return (
@@ -216,6 +232,14 @@ export default function App() {
         <section className="card result" data-ok={result.verified}>
           <h2>{result.verified ? 'Authorized' : 'Rejected'}</h2>
           <p>{result.verified ? result.message : result.reason}</p>
+          {retrying && (
+            <p className="hint">Retrying with a fresh challenge…</p>
+          )}
+          {!result.verified && !retrying && attempt >= MAX_ATTEMPTS && (
+            <p className="hint">
+              Maximum attempts reached — transaction locked.
+            </p>
+          )}
           {result.transcript && (
             <p className="hint">STT heard: “{result.transcript}”</p>
           )}
@@ -227,7 +251,14 @@ export default function App() {
         </section>
       )}
 
-      {challenge && <AuthModal challenge={challenge} onDone={handleAuthDone} />}
+      {challenge && (
+        <AuthModal
+          challenge={challenge}
+          attempt={attempt}
+          maxAttempts={MAX_ATTEMPTS}
+          onDone={handleAuthDone}
+        />
+      )}
     </main>
   );
 }

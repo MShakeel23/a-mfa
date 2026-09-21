@@ -310,23 +310,26 @@ app.post('/api/auth/verify', upload.single('audio'), async (req, res) => {
     return res.status(400).json({ verified: false, reason: 'malformed payload' });
   }
   const session = sessions.get(sessionId);
-  const fail = (reason, checks) => {
+  // retryable=false: no point retrying (e.g. unknown credential). Every retry
+  // gets a NEW challenge + phrase from the client - sessions stay single-use.
+  const fail = (reason, checks, retryable = true) => {
     audit({
       event: 'verify',
       username: session?.username,
       ok: false,
       reason,
     });
-    return res.status(401).json({ verified: false, reason, checks });
+    return res.status(401).json({ verified: false, reason, checks, retryable });
   };
 
-  if (!session || session.kind !== 'authentication') return fail('unknown session');
+  if (!session || session.kind !== 'authentication')
+    return fail('unknown session', undefined, false);
   sessions.delete(sessionId); // single-use: a session can never be replayed
   if (Date.now() > session.expiresAt) return fail('challenge expired');
 
   const user = db.users.find((u) => u.username === session.username);
   const cred = user?.credentials.find((c) => c.id === response?.id);
-  if (!cred) return fail('credential not recognized');
+  if (!cred) return fail('credential not recognized', undefined, false);
 
   const checks = { signature: false, phrase: false, voiceprint: 'not-run' };
   try {

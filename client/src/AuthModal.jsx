@@ -11,7 +11,7 @@ const STAGE = {
   SUBMITTING: 'submitting',
 };
 
-export default function AuthModal({ challenge, onDone }) {
+export default function AuthModal({ challenge, attempt = 1, maxAttempts = 3, onDone }) {
   const [stage, setStage] = useState(STAGE.FIRING);
   const [hapticChannel, setHapticChannel] = useState(null);
   const [micState, setMicState] = useState('starting'); // starting|recording|denied
@@ -34,8 +34,13 @@ export default function AuthModal({ challenge, onDone }) {
     // 1. Haptic risk signature fires the moment the screen dims.
     setHapticChannel(fireRiskPattern(challenge.risk.pattern));
 
-    // 2. Voice engine announces the single-use, session-bound phrase.
-    speakPrompt(`Say "${challenge.phrase}" to approve`);
+    // 2. Voice engine announces the exact transaction context first - the
+    //    user must hear WHAT they are approving - then the one-time phrase.
+    const { txType, amount, payee } = challenge.transaction;
+    const what = `${txType} of ${amount} dollars${payee ? ` to ${payee}` : ''}`;
+    speakPrompt(
+      `Authorize ${what}. Say "${challenge.phrase}" to approve.`,
+    );
 
     // 3. Mic opens BEFORE the biometric prompt - real audio is captured while
     //    the user speaks + holds the sensor simultaneously. The recording is
@@ -116,6 +121,7 @@ export default function AuthModal({ challenge, onDone }) {
           <span className="risk-badge" data-level={challenge.risk.level}>
             {challenge.risk.label}
           </span>
+          <span className="attempt-tag">Attempt {attempt}/{maxAttempts}</span>
           <span className="countdown" aria-live="polite">
             {secondsLeft}s
           </span>
