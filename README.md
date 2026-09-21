@@ -66,6 +66,39 @@ The haptic channel is the experimental/"research" part of this prototype:
 typed-phrase fallback elsewhere, which doubles as the accessibility path for
 deaf/mute users.
 
+## Testing on your phone (same WiFi)
+
+Opening `http://<laptop-IP>:5173` on the phone loads the page, but **WebAuthn
+will not fire** — biometrics require HTTPS (or localhost), and an IP address
+can't be a WebAuthn relying-party domain. Use a Cloudflare quick tunnel:
+
+```bash
+# 1. one-time install
+winget install Cloudflare.cloudflared
+
+# 2. terminal 1 - start the tunnel first, copy the https URL it prints
+cloudflared tunnel --url http://localhost:5173
+#    -> e.g. https://abc-def-ghi.trycloudflare.com
+
+# 3. terminal 2 - start the app, telling the server the tunnel's domain
+cd a-mfa
+#   bash / Git Bash:
+RP_ID=abc-def-ghi.trycloudflare.com ORIGIN=https://abc-def-ghi.trycloudflare.com npm run dev
+#   PowerShell:
+$env:RP_ID="abc-def-ghi.trycloudflare.com"; $env:ORIGIN="https://abc-def-ghi.trycloudflare.com"; npm run dev
+
+# 4. on the phone (Android Chrome): open https://abc-def-ghi.trycloudflare.com
+#    grant mic permission, register a passkey (fingerprint / screen lock),
+#    then authorize a transfer - the vibration pattern fires for real.
+```
+
+Flow: phone → tunnel → laptop Vite (:5173) → `/api` proxied → server (:3001).
+`RP_ID` must equal the tunnel hostname so the passkey is bound to that origin.
+
+iPhone note: iOS Safari ignores `navigator.vibrate()` and lacks
+`SpeechRecognition`, so use an **Android** phone for the full demo; on iOS the
+haptic channel falls back to the visual pulse.
+
 ## Threat model mapping (from the design doc)
 
 - **Replay** → single-use session + random phrase per attempt; session is
