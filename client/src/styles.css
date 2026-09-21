@@ -77,6 +77,7 @@ body {
   display: flex;
   gap: 0.6rem;
   margin-bottom: 0.6rem;
+  flex-wrap: wrap;
 }
 
 input,
@@ -293,4 +294,46 @@ button:disabled {
   font-size: 0.9rem;
   color: var(--accent);
   text-align: center;
+}
+
+/* ---- Mobile ---- */
+
+@media (max-width: 480px) {
+  .page {
+    padding: 1.25rem 0.75rem 3rem;
+  }
+
+  .hero h1 {
+    font-size: 1.8rem;
+  }
+
+  .tagline {
+    font-size: 0.9rem;
+  }
+
+  .row {
+    flex-direction: column;
+  }
+
+  input,
+  select,
+  button {
+    width: 100%;
+    min-height: 44px; /* touch target */
+    font-size: 1rem; /* prevents iOS zoom-on-focus */
+  }
+
+  .modal {
+    padding: 1rem;
+    max-height: 92vh;
+    overflow-y: auto;
+  }
+
+  .phrase-text {
+    font-size: 1.05rem;
+  }
+
+  .channel-status {
+    font-size: 0.8rem;
+  }
 }

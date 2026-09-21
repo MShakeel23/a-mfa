@@ -105,3 +105,20 @@ haptic channel falls back to the visual pulse.
   deleted on first verify.
 - **Blind signing** → risk-encoded haptic pulse fires at dim-screen time.
 - **Eavesdropping** → no static secret is ever spoken; only a random phrase.
+
+## Design boundary: voice is liveness, not identity
+
+The voice channel verifies **what was said** (the fresh, session-bound phrase),
+not **who said it**. The browser's `SpeechRecognition` API returns text only —
+it provides no speaker embedding, so voiceprint matching is impossible
+client-side. Identity binding comes from the WebAuthn biometric; the phrase is
+an anti-replay nonce that proves a live human approved *this* transaction.
+
+Consequence: a co-present attacker could speak the phrase while the victim's
+finger is on the sensor — which is why the haptic risk signature and the
+simultaneity window exist as compensating controls.
+
+Future work: record audio with `MediaRecorder`/`getUserMedia` alongside the
+assertion and run speaker verification server-side (e.g. an ECAPA-TDNN
+embedding model via SpeechBrain) to upgrade the voice channel from
+liveness-only to voiceprint-bound.
