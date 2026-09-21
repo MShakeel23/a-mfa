@@ -125,6 +125,28 @@ button:disabled {
   margin: 0.25rem 0 0;
 }
 
+.warn-line {
+  color: var(--warn);
+}
+
+.recording-line {
+  color: var(--bad);
+  font-size: 0.9rem;
+  margin: 0.25rem 0 0;
+  animation: blink 1.2s ease-in-out infinite;
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.enroll-box {
+  display: flex;
+  flex-direction: column;
+}
+
 .error-line {
   color: var(--bad);
 }

@@ -3,6 +3,7 @@ import cors from 'cors';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import multer from 'multer';
 import { fileURLToPath } from 'node:url';
 import {
   generateRegistrationOptions,
@@ -20,6 +21,15 @@ const ORIGINS = (process.env.ORIGIN || 'http://localhost:5173')
   .split(',')
   .map((o) => o.trim());
 const SESSION_TTL_MS = 60_000;
+const VOICE_URL = process.env.VOICE_URL || 'http://localhost:8000';
+// Cosine-similarity accept threshold for the ECAPA-TDNN voiceprint.
+// 0.25 is a pragmatic demo value; raise toward 0.35 for stricter matching.
+const VOICE_THRESHOLD = Number(process.env.VOICE_THRESHOLD || 0.25);
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+});
 
 // ---------------------------------------------------------------------------
 // Persistence (flat JSON file - fine for a prototype)
@@ -111,6 +121,26 @@ function audit(entry) {
   saveDb(db);
 }
 
+// --- Voice intelligence service (Flask on :8000) ----------------------------
+// Sends captured audio to faster-whisper (STT) + ECAPA-TDNN (speaker
+// embedding). Returns { transcript, embedding } - throws if unavailable.
+async function analyzeVoice(audioBuffer) {
+  const fd = new FormData();
+  fd.append('audio', new Blob([audioBuffer], { type: 'audio/wav' }), 'v.wav');
+  const res = await fetch(`${VOICE_URL}/analyze`, { method: 'POST', body: fd });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `voice service HTTP ${res.status}`);
+  return data;
+}
+
+// Both vectors are unit-normed by the voice service, so dot product == cosine.
+function voiceprintScore(enrolled, sample) {
+  if (!Array.isArray(enrolled) || !Array.isArray(sample)) return null;
+  let dot = 0;
+  for (let i = 0; i < enrolled.length; i++) dot += enrolled[i] * sample[i];
+  return dot;
+}
+
 // ---------------------------------------------------------------------------
 // App
 // ---------------------------------------------------------------------------
@@ -160,8 +190,16 @@ app.post('/api/register/options', async (req, res) => {
   res.json({ sessionId, options });
 });
 
-app.post('/api/register/verify', async (req, res) => {
-  const { sessionId, response } = req.body || {};
+// multipart: fields sessionId + response(JSON string) + optional 'audio' file
+// carrying the spoken enrollment sample for the voiceprint.
+app.post('/api/register/verify', upload.single('audio'), async (req, res) => {
+  const sessionId = req.body?.sessionId;
+  let response;
+  try {
+    response = JSON.parse(req.body?.response || 'null');
+  } catch {
+    return res.status(400).json({ error: 'malformed response payload' });
+  }
   const session = sessions.get(sessionId);
   if (!session || session.kind !== 'registration' || Date.now() > session.expiresAt) {
     return res.status(400).json({ error: 'invalid or expired session' });
@@ -188,10 +226,29 @@ app.post('/api/register/verify', async (req, res) => {
       counter: credential.counter,
       transports: credential.transports || [],
     });
+
+    // Voiceprint enrolment: embed the captured audio via the voice service.
+    let voiceprintEnrolled = false;
+    let voiceError = null;
+    if (req.file) {
+      try {
+        const { embedding } = await analyzeVoice(req.file.buffer);
+        user.voiceprint = embedding;
+        voiceprintEnrolled = true;
+      } catch (err) {
+        voiceError = err.message;
+      }
+    }
+
     saveDb(db);
     sessions.delete(sessionId);
-    audit({ event: 'register', username: user.username, ok: true });
-    res.json({ verified: true });
+    audit({
+      event: 'register',
+      username: user.username,
+      ok: true,
+      voiceprint: voiceprintEnrolled,
+    });
+    res.json({ verified: true, voiceprint: voiceprintEnrolled, voiceError });
   } catch (err) {
     audit({ event: 'register', username: session.username, ok: false, reason: err.message });
     res.status(400).json({ error: err.message });
@@ -240,18 +297,27 @@ app.post('/api/auth/challenge', async (req, res) => {
   });
 });
 
-// --- Verify: WebAuthn signature + spoken phrase, bound to one session -------
-app.post('/api/auth/verify', async (req, res) => {
-  const { sessionId, response, transcript } = req.body || {};
+// --- Verify: WebAuthn signature + spoken phrase + voiceprint, one session ---
+// multipart: sessionId + response(JSON) + 'audio' file (spoken phrase sample).
+// A typed 'transcript' field is the accessibility fallback and is only
+// accepted for accounts without an enrolled voiceprint.
+app.post('/api/auth/verify', upload.single('audio'), async (req, res) => {
+  const sessionId = req.body?.sessionId;
+  let response;
+  try {
+    response = JSON.parse(req.body?.response || 'null');
+  } catch {
+    return res.status(400).json({ verified: false, reason: 'malformed payload' });
+  }
   const session = sessions.get(sessionId);
-  const fail = (reason) => {
+  const fail = (reason, checks) => {
     audit({
       event: 'verify',
       username: session?.username,
       ok: false,
       reason,
     });
-    return res.status(401).json({ verified: false, reason });
+    return res.status(401).json({ verified: false, reason, checks });
   };
 
   if (!session || session.kind !== 'authentication') return fail('unknown session');
@@ -262,6 +328,7 @@ app.post('/api/auth/verify', async (req, res) => {
   const cred = user?.credentials.find((c) => c.id === response?.id);
   if (!cred) return fail('credential not recognized');
 
+  const checks = { signature: false, phrase: false, voiceprint: 'not-run' };
   try {
     const verification = await verifyAuthenticationResponse({
       response,
@@ -277,16 +344,51 @@ app.post('/api/auth/verify', async (req, res) => {
       },
     });
 
-    if (!verification.verified) return fail('biometric signature invalid');
+    if (!verification.verified) return fail('biometric signature invalid', checks);
     cred.counter = verification.authenticationInfo.newCounter;
     saveDb(db);
+    checks.signature = true;
   } catch (err) {
-    return fail(`biometric verification error: ${err.message}`);
+    return fail(`biometric verification error: ${err.message}`, checks);
   }
 
-  if (!phraseMatches(session.phrase, transcript)) {
-    return fail(`spoken phrase did not match (heard: "${transcript || 'nothing'}")`);
+  // --- Voice channel ---------------------------------------------------------
+  let heard = '';
+  let voiceScore = null;
+
+  if (req.file) {
+    // Real audio: server-side STT + speaker verification.
+    let analysis;
+    try {
+      analysis = await analyzeVoice(req.file.buffer);
+    } catch (err) {
+      return fail(`voice analysis failed: ${err.message}`, checks);
+    }
+    heard = analysis.transcript || '';
+
+    if (Array.isArray(user.voiceprint)) {
+      voiceScore = voiceprintScore(user.voiceprint, analysis.embedding);
+      checks.voiceprint = voiceScore;
+      if (voiceScore < VOICE_THRESHOLD) {
+        return fail(
+          `voiceprint mismatch (score ${voiceScore.toFixed(2)} < ${VOICE_THRESHOLD})`,
+          checks,
+        );
+      }
+    } else {
+      checks.voiceprint = 'skipped (no voiceprint enrolled)';
+    }
+  } else if (Array.isArray(user.voiceprint)) {
+    return fail('voice sample required - this account has an enrolled voiceprint', checks);
+  } else {
+    heard = req.body?.transcript || ''; // accessibility fallback, no voiceprint
+    checks.voiceprint = 'skipped (typed fallback)';
   }
+
+  if (!phraseMatches(session.phrase, heard)) {
+    return fail(`spoken phrase did not match (heard: "${heard || 'nothing'}")`, checks);
+  }
+  checks.phrase = true;
 
   audit({
     event: 'verify',
@@ -294,12 +396,16 @@ app.post('/api/auth/verify', async (req, res) => {
     ok: true,
     risk: session.risk,
     amount: session.transaction.amount,
+    voiceScore,
   });
   res.json({
     verified: true,
     message: 'Transaction authorized',
     transaction: session.transaction,
     risk: session.risk,
+    transcript: heard,
+    voiceScore,
+    checks,
   });
 });
 

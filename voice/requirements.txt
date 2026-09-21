@@ -1,0 +1,6 @@
+flask>=3.0,<4
+soundfile>=0.12,<0.14
+speechbrain>=1.0,<2
+faster-whisper>=1.0,<2
+# torch/torchaudio are installed separately from the CPU wheel index:
+#   pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu

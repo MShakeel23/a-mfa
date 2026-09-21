@@ -8,9 +8,10 @@
     "server"
   ],
   "scripts": {
-    "dev": "concurrently -n server,client -c blue,green \"npm run dev -w server\" \"npm run dev -w client\"",
+    "dev": "concurrently -n server,client,voice -c blue,green,magenta \"npm run dev -w server\" \"npm run dev -w client\" \"npm run dev:voice\"",
     "dev:server": "npm run dev -w server",
     "dev:client": "npm run dev -w client",
+    "dev:voice": "cd voice && .venv/Scripts/python app.py",
     "build": "npm run build -w client",
     "start": "node server/index.js"
   },

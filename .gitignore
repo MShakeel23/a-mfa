@@ -4,3 +4,8 @@ dist/
 server/data/db.json
 *.log
 .DS_Store
+
+# python voice service
+voice/.venv/
+voice/pretrained_models/
+voice/__pycache__/

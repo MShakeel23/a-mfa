@@ -7,7 +7,7 @@ Prototype of the A-MFA security gateway: replaces OTPs/CAPTCHAs with a single
 | --- | --- | --- |
 | Biometric possession + presence | WebAuthn (`navigator.credentials`) via SimpleWebAuthn | phishing, credential theft |
 | Haptic risk signature | HTML5 Vibration API (`navigator.vibrate`) | blind signing — works even if the device is muted |
-| Dynamic liveness phrase | Web Speech API (`SpeechRecognition` + `speechSynthesis`) | replay attacks, coercion |
+| Dynamic phrase + **voiceprint** | `MediaRecorder` audio → faster-whisper STT + ECAPA-TDNN speaker embedding | replay attacks, coercion, impersonation |
 
 The spoken phrase is **random per session and bound to the server challenge**,
 so a recorded approval can never be replayed. The haptic pattern encodes
@@ -16,21 +16,36 @@ physically feels the risk level before the key is released.
 
 ## Stack
 
-- **Client** — React 18 + Vite, `@simplewebauthn/browser`, Web Speech API,
-  Vibration API
+- **Client** — React 18 + Vite, `@simplewebauthn/browser`, `MediaRecorder`
+  (real audio capture → 16kHz WAV), `speechSynthesis` prompt, Vibration API
 - **Server** — Node + Express, `@simplewebauthn/server` (challenge generation,
-  assertion verification, phrase matching, audit log)
+  assertion verification, phrase + voiceprint matching, audit log)
+- **Voice AI service** — Python + Flask on :8000:
+  - `faster-whisper` (`base.en`, int8) — server-side speech-to-text
+  - `speechbrain` ECAPA-TDNN (`spkrec-ecapa-voxceleb`) — 192-dim speaker
+    embedding; server compares cosine similarity vs the enrolled voiceprint
 - **Storage** — flat `server/data/db.json` (gitignored)
 
 ## Run it
 
 ```bash
-npm install        # installs client + server workspaces
-npm run dev        # starts both: API on :3001, UI on http://localhost:5173
+# one-time: JS deps
+npm install
+
+# one-time: python voice service (use Python 3.11-3.13; 3.14 lacks torch wheels)
+cd voice
+python -m venv .venv
+.venv/Scripts/pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+.venv/Scripts/pip install -r requirements.txt
+cd ..
+
+# every run: all three processes (server :3001, vite :5173, voice :8000)
+npm run dev
 ```
 
 Open <http://localhost:5173> in **Chrome/Edge**, register a passkey
-(Windows Hello / Touch ID / Android biometrics), then initiate a transfer.
+(Windows Hello / Touch ID / Android biometrics), speak the enrollment phrase
+to create your voiceprint, then initiate a transfer.
 
 Production-style run:
 
@@ -62,9 +77,10 @@ The haptic channel is the experimental/"research" part of this prototype:
   `cloudflared`. Then set env vars before starting:
   `RP_ID=your.domain ORIGIN=https://your.domain`.
 
-`SpeechRecognition` likewise only exists in Chromium browsers — the UI offers a
-typed-phrase fallback elsewhere, which doubles as the accessibility path for
-deaf/mute users.
+Speech is captured with `MediaRecorder` (works in every modern browser) and
+transcribed server-side — no browser STT dependency. If the mic is denied, a
+typed-phrase fallback doubles as the accessibility path for deaf/mute users
+(only honoured for accounts without an enrolled voiceprint).
 
 ## Testing on your phone (same WiFi)
 
@@ -106,19 +122,18 @@ haptic channel falls back to the visual pulse.
 - **Blind signing** → risk-encoded haptic pulse fires at dim-screen time.
 - **Eavesdropping** → no static secret is ever spoken; only a random phrase.
 
-## Design boundary: voice is liveness, not identity
+## Voice channel: liveness + speaker identity
 
-The voice channel verifies **what was said** (the fresh, session-bound phrase),
-not **who said it**. The browser's `SpeechRecognition` API returns text only —
-it provides no speaker embedding, so voiceprint matching is impossible
-client-side. Identity binding comes from the WebAuthn biometric; the phrase is
-an anti-replay nonce that proves a live human approved *this* transaction.
+The phrase audio is recorded client-side (`MediaRecorder` → 16kHz WAV) and
+analysed server-side in a single pass:
 
-Consequence: a co-present attacker could speak the phrase while the victim's
-finger is on the sensor — which is why the haptic risk signature and the
-simultaneity window exist as compensating controls.
+1. **faster-whisper** transcribes it → checked against the session-bound phrase
+   (anti-replay / intent).
+2. **ECAPA-TDNN** produces a speaker embedding → cosine similarity vs the
+   voiceprint enrolled at registration (identity). Accounts with an enrolled
+   voiceprint *require* a voice sample — the typed-phrase fallback only works
+   for accounts without one.
 
-Future work: record audio with `MediaRecorder`/`getUserMedia` alongside the
-assertion and run speaker verification server-side (e.g. an ECAPA-TDNN
-embedding model via SpeechBrain) to upgrade the voice channel from
-liveness-only to voiceprint-bound.
+`VOICE_THRESHOLD` env var tunes the accept threshold (default `0.25`; raise
+toward `0.35` for stricter matching). Every attempt's transcript, score and
+per-channel pass/fail land in `server/data/db.json`'s `auditLog`.
