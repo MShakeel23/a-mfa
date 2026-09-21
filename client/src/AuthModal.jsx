@@ -24,9 +24,16 @@ export default function AuthModal({ challenge, onDone }) {
   );
   const [bioStatus, setBioStatus] = useState('waiting');
   const transcriptRef = useRef('');
+  const typedRef = useRef('');
   const finishedRef = useRef(false);
+  const startedRef = useRef(false);
 
   useEffect(() => {
+    // Guard: never start a second WebAuthn ceremony - a new request aborts
+    // the in-flight one ("authentication ceremony was sent an abort signal").
+    if (startedRef.current) return;
+    startedRef.current = true;
+
     // 1. Haptic risk signature fires the moment the screen dims.
     setHapticChannel(fireRiskPattern(challenge.risk.pattern));
 
@@ -62,7 +69,7 @@ export default function AuthModal({ challenge, onDone }) {
         setStage(STAGE.SUBMITTING);
         // Give STT a brief moment to flush the last final segment.
         await new Promise((r) => setTimeout(r, 600));
-        const transcript = transcriptRef.current || typedPhrase;
+        const transcript = transcriptRef.current || typedRef.current;
         const result = await api
           .authVerify(challenge.sessionId, assertion, transcript)
           .catch((err) => ({ verified: false, reason: err.message }));
@@ -167,7 +174,10 @@ export default function AuthModal({ challenge, onDone }) {
             className="phrase-input"
             placeholder="Type the phrase (accessibility fallback)"
             value={typedPhrase}
-            onChange={(e) => setTypedPhrase(e.target.value)}
+            onChange={(e) => {
+              setTypedPhrase(e.target.value);
+              typedRef.current = e.target.value;
+            }}
           />
         )}
 
